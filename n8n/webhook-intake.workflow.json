@@ -1,0 +1,211 @@
+{
+  "name": "AI Lead Agent - webhook intake to Google Sheets",
+  "nodes": [
+    {
+      "id": "89fe960c-3f58-495d-a602-022c6d0eac75",
+      "name": "Lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "585041f7-5c76-424b-afd8-939b107fb455",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "52df28b8-bff7-4079-a199-260078e035cf",
+      "name": "Qualify lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_AGENT_URL }}/api/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.LEAD_AGENT_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ leads: Array.isArray($json.body.leads) ? $json.body.leads : [$json.body] }) }}",
+        "options": {
+          "timeout": 600000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "cdc48b8c-ffa1-472e-b51b-ba02419937c4",
+      "name": "Respond with summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        -120
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.summary) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "92d96c62-fc35-4f11-bf0f-38deb417a207",
+      "name": "Flatten results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        120
+      ],
+      "parameters": {
+        "jsCode": "// One row per processed lead, flattened for Google Sheets.\nconst out = [];\nfor (const r of $json.results || []) {\n  const l = r.lead || {};\n  const lead = l.lead || {};\n  out.push({ json: {\n    status: r.status,\n    errors: (r.errors || []).join('; '),\n    duplicate_of: r.duplicateOf || '',\n    full_name: lead.fullName || '',\n    email: lead.email || '',\n    title: lead.title || '',\n    company: lead.company || '',\n    company_domain: lead.companyDomain || '',\n    country: lead.country || '',\n    score: l.score ? l.score.score : '',\n    tier: l.score ? l.score.tier : '',\n    reasons: l.score ? l.score.reasons.join(' | ') : '',\n    missing_data: l.score ? l.score.missing_data.join(' | ') : '',\n    outreach_subject: l.outreach ? l.outreach.subject : '',\n    outreach_body: l.outreach ? l.outreach.body : '',\n    email_domain_accepts_mail: l.enrichment ? String(l.enrichment.emailDomainAcceptsMail) : '',\n    processed_at: new Date().toISOString(),\n  }});\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "8fb46012-d3f2-4eed-9abd-cf919b4fc726",
+      "name": "Keep created leads",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        660,
+        120
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "abbaeff2-540c-42ad-b75b-0ffef041ec2d",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "created",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "342585ba-1dc5-41f9-9a0b-f81e6d86d9ab",
+      "name": "Append to 'Scored Leads'",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.LEADS_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Scored Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Qualify lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify lead": {
+      "main": [
+        [
+          {
+            "node": "Respond with summary",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Flatten results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten results": {
+      "main": [
+        [
+          {
+            "node": "Keep created leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep created leads": {
+      "main": [
+        [
+          {
+            "node": "Append to 'Scored Leads'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

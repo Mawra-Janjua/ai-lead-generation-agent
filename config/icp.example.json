@@ -1,0 +1,9 @@
+{
+  "name": "Mid-market logistics & e-commerce operations",
+  "description": "Companies with 50-1,000 employees in logistics, e-commerce or retail that run repetitive back-office operations (order handling, invoicing, customer email) and could save time with AI workflow automation.",
+  "targetIndustries": ["Logistics", "Transportation", "E-commerce", "Retail", "Wholesale"],
+  "employeeRange": { "min": 50, "max": 1000 },
+  "targetCountries": ["United States", "United Kingdom", "Germany", "Netherlands", "United Arab Emirates", "Pakistan"],
+  "targetTitles": ["Operations", "COO", "Head of Operations", "Founder", "CEO", "Automation", "Customer Support"],
+  "exclusions": ["Students or job seekers", "Competitors offering automation services", "Companies with fewer than 5 employees"]
+}

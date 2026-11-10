@@ -1,0 +1,33 @@
+# Usage: cp .env.example .env && docker compose up -d --build
+services:
+  lead-agent:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/leads.db
+    ports:
+      - "4102:4102"
+    volumes:
+      - lead-data:/app/data
+      - ./config:/app/config:ro
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      LEAD_AGENT_URL: http://lead-agent:4102
+      LEAD_AGENT_API_KEY: ${API_KEY}
+      LEADS_SHEET_ID: ${LEADS_SHEET_ID:-}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n:/workflows:ro
+    depends_on:
+      - lead-agent
+    restart: unless-stopped
+
+volumes:
+  lead-data:
+  n8n-data:

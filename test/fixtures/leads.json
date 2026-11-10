@@ -1,0 +1,13 @@
+{
+  "_note": "Fictional test data. Domains use the reserved .example TLD; none of these people or companies exist.",
+  "leads": [
+    { "firstName": "SARAH", "lastName": "KHAN", "email": "Sarah.Khan@Northfield-Logistics.example", "title": "Head of Operations", "company": "Northfield Logistics", "website": "https://www.northfield-logistics.example/about", "country": "UK", "industry": "Logistics", "employeeCount": "240", "source": "webinar signup" },
+    { "fullName": "daniel o'brien", "email": "daniel@brightcart.example", "title": "Founder & CEO", "company": "BrightCart", "website": "brightcart.example", "country": "usa", "industry": "E-commerce", "employeeCount": 65, "notes": "Asked about automating order-status emails during a discovery call." },
+    { "fullName": "Ayesha Malik", "email": "ayesha.malik@gmail.com", "title": "Student", "company": "Self", "country": "Pakistan" },
+    { "fullName": "Liam Turner", "email": "liam@quantumledger.example", "title": "CFO", "company": "Quantum Ledger Bank", "website": "quantumledger.example", "country": "Germany", "industry": "Banking", "employeeCount": 12000 },
+    { "firstName": "Sarah", "lastName": "Khan", "email": "sarah.khan@northfield-logistics.example", "company": "Northfield Logistics" },
+    { "fullName": "No Contact", "company": "Mystery Co" },
+    { "fullName": "Bad Email", "email": "bad@@example", "company": "Typo Inc", "website": "typo.example" },
+    { "fullName": "=HYPERLINK(\"http://evil.example\")", "email": "ops@formula.example", "company": "+Formula Ltd", "website": "formula.example" }
+  ]
+}

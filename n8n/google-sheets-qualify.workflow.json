@@ -1,0 +1,207 @@
+{
+  "name": "AI Lead Agent - Google Sheets qualify + export",
+  "nodes": [
+    {
+      "id": "fd17cbeb-3552-4bc6-82af-0aee486bec8f",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "961f1f12-d936-498e-b9b3-fd06794e530d",
+      "name": "Read 'Leads In' sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.LEADS_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads In"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "id": "710569b6-76ac-4857-8f20-311ad8fdc5d3",
+      "name": "Build batches of 50",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Turn spreadsheet rows into one batch request (max 50 leads per call).\nconst leads = $input.all().map(({ json: r }) => ({\n  firstName: r['First name'] || r.firstName,\n  lastName: r['Last name'] || r.lastName,\n  email: r['Email'] || r.email,\n  title: r['Title'] || r.title,\n  company: r['Company'] || r.company,\n  website: r['Website'] || r.website,\n  country: r['Country'] || r.country,\n  industry: r['Industry'] || r.industry,\n  employeeCount: r['Employees'] || r.employeeCount,\n  notes: r['Notes'] || r.notes,\n  source: 'google-sheets',\n}));\nconst batches = [];\nfor (let i = 0; i < leads.length; i += 50) batches.push({ json: { leads: leads.slice(i, i + 50) } });\nreturn batches;"
+      }
+    },
+    {
+      "id": "83e25237-68f6-467d-975a-83504ed74c45",
+      "name": "Qualify with Lead Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_AGENT_URL }}/api/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.LEAD_AGENT_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 600000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "0713f640-22f7-4f81-9540-d1b1ba47919f",
+      "name": "Flatten results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// One row per processed lead, flattened for Google Sheets.\nconst out = [];\nfor (const r of $json.results || []) {\n  const l = r.lead || {};\n  const lead = l.lead || {};\n  out.push({ json: {\n    status: r.status,\n    errors: (r.errors || []).join('; '),\n    duplicate_of: r.duplicateOf || '',\n    full_name: lead.fullName || '',\n    email: lead.email || '',\n    title: lead.title || '',\n    company: lead.company || '',\n    company_domain: lead.companyDomain || '',\n    country: lead.country || '',\n    score: l.score ? l.score.score : '',\n    tier: l.score ? l.score.tier : '',\n    reasons: l.score ? l.score.reasons.join(' | ') : '',\n    missing_data: l.score ? l.score.missing_data.join(' | ') : '',\n    outreach_subject: l.outreach ? l.outreach.subject : '',\n    outreach_body: l.outreach ? l.outreach.body : '',\n    email_domain_accepts_mail: l.enrichment ? String(l.enrichment.emailDomainAcceptsMail) : '',\n    processed_at: new Date().toISOString(),\n  }});\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "32e9aef3-d5de-4c3e-98d8-727581d8d85c",
+      "name": "Append to 'Scored Leads'",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.LEADS_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Scored Leads"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Read 'Leads In' sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read 'Leads In' sheet": {
+      "main": [
+        [
+          {
+            "node": "Build batches of 50",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build batches of 50": {
+      "main": [
+        [
+          {
+            "node": "Qualify with Lead Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify with Lead Agent": {
+      "main": [
+        [
+          {
+            "node": "Flatten results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten results": {
+      "main": [
+        [
+          {
+            "node": "Append to 'Scored Leads'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

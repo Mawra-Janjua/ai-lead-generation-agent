@@ -1,0 +1,26 @@
+{
+  "name": "ai-lead-generation-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI lead qualification agent: validation, normalization, permitted enrichment, Claude ICP scoring, outreach drafts, dedupe and CSV export.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.ts",
+    "dev": "node --watch --env-file-if-exists=.env src/server.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.7.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
