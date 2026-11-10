@@ -1,0 +1,212 @@
+{
+  "name": "AI Lead Agent - lead form",
+  "nodes": [
+    {
+      "id": "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0",
+      "name": "Lead form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+      "parameters": {
+        "formTitle": "Tell us about your company",
+        "formDescription": "We use these details only to qualify your request. Company is required; add a website or an email.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Company",
+              "placeholder": "Acme Logistics",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Website",
+              "placeholder": "acme.example"
+            },
+            {
+              "fieldLabel": "First name"
+            },
+            {
+              "fieldLabel": "Last name"
+            },
+            {
+              "fieldLabel": "Email",
+              "fieldType": "email",
+              "placeholder": "name@company.example"
+            },
+            {
+              "fieldLabel": "Title",
+              "placeholder": "Head of Operations"
+            },
+            {
+              "fieldLabel": "Country"
+            },
+            {
+              "fieldLabel": "Notes",
+              "fieldType": "textarea"
+            }
+          ]
+        },
+        "options": {
+          "path": "lead-form"
+        }
+      }
+    },
+    {
+      "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "name": "Map form to lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Form field labels -> Lead Agent fields. Empty fields are dropped by the API.\nconst f = $input.first().json;\nreturn [{ json: { leads: [{\n  company: f['Company'],\n  website: f['Website'],\n  firstName: f['First name'],\n  lastName: f['Last name'],\n  email: f['Email'],\n  title: f['Title'],\n  country: f['Country'],\n  notes: f['Notes'],\n  source: 'n8n-form',\n}] } }];"
+      }
+    },
+    {
+      "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+      "name": "Qualify lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LEAD_AGENT_URL }}/api/leads",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.LEAD_AGENT_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'n8n-form-' + $execution.id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "3c4d5e6f-7a8b-4c9d-8e1f-2a3b4c5d6e7f",
+      "name": "Format result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Turn the API result into the completion page text.\nconst r = ($input.first().json.results || [])[0] || {};\nconst errors = (r.errors || []).join('; ');\nlet title;\nlet message;\nif (r.status === 'created') {\n  const s = r.lead && r.lead.score;\n  title = 'Thanks, your details were received';\n  message = s ? `ICP fit score: ${s.score}/100 (tier ${s.tier}).` : 'Your details were saved.';\n} else if (r.status === 'duplicate') {\n  title = 'Already received';\n  message = 'These details are already on file. No new lead was created.';\n} else if (r.status === 'invalid') {\n  title = 'Please check your details';\n  message = `The lead was not saved: ${errors}. Go back and correct the form.`;\n} else if (r.status === 'failed') {\n  title = 'Saved, but not scored yet';\n  message = `Your details were saved, but scoring failed: ${errors}`;\n} else {\n  title = 'Unexpected response';\n  message = 'The Lead Agent returned no result for this submission.';\n}\nreturn [{ json: { title, message } }];"
+      }
+    },
+    {
+      "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f80",
+      "name": "Show result",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -100
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "={{ $json.title }}",
+        "completionMessage": "={{ $json.message }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8091",
+      "name": "Show error",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "Sorry, something went wrong",
+        "completionMessage": "={{ 'Your details could not be processed right now (' + (($json.error && ($json.error.message || $json.error)) || 'request failed') + '). Please try again later.' }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Lead form": {
+      "main": [
+        [
+          {
+            "node": "Map form to lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map form to lead": {
+      "main": [
+        [
+          {
+            "node": "Qualify lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualify lead": {
+      "main": [
+        [
+          {
+            "node": "Format result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format result": {
+      "main": [
+        [
+          {
+            "node": "Show result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,9 +1,11 @@
-# Usage: cp .env.example .env && docker compose up -d --build
+# Usage: cp .env.example .env, set API_KEY (and ANTHROPIC_API_KEY), then:
+#   docker compose up -d --build
 services:
   lead-agent:
     build: .
     env_file: .env
     environment:
+      HOST: 0.0.0.0
       DATABASE_PATH: /app/data/leads.db
     ports:
       - "4102:4102"

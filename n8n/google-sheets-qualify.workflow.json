@@ -43,16 +43,49 @@
       }
     },
     {
-      "id": "710569b6-76ac-4857-8f20-311ad8fdc5d3",
-      "name": "Build batches of 50",
-      "type": "n8n-nodes-base.code",
+      "id": "2f0c8a4e-6b1d-4c7a-8e3f-5a9b1c2d3e40",
+      "name": "Only unprocessed rows",
+      "type": "n8n-nodes-base.filter",
       "typeVersion": 2,
       "position": [
         440,
         0
       ],
       "parameters": {
-        "jsCode": "// Turn spreadsheet rows into one batch request (max 50 leads per call).\nconst leads = $input.all().map(({ json: r }) => ({\n  firstName: r['First name'] || r.firstName,\n  lastName: r['Last name'] || r.lastName,\n  email: r['Email'] || r.email,\n  title: r['Title'] || r.title,\n  company: r['Company'] || r.company,\n  website: r['Website'] || r.website,\n  country: r['Country'] || r.country,\n  industry: r['Industry'] || r.industry,\n  employeeCount: r['Employees'] || r.employeeCount,\n  notes: r['Notes'] || r.notes,\n  source: 'google-sheets',\n}));\nconst batches = [];\nfor (let i = 0; i < leads.length; i += 50) batches.push({ json: { leads: leads.slice(i, i + 50) } });\nreturn batches;"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "8d2e6f1a-3b4c-4d5e-9f60-7a8b9c0d1e2f",
+              "leftValue": "={{ $json['Status'] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "710569b6-76ac-4857-8f20-311ad8fdc5d3",
+      "name": "Build batches of 50",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Turn unprocessed spreadsheet rows into batch requests (max 50 leads per call).\n// rowNumbers maps each result index back to its sheet row; batchRows is a stable\n// id for the Idempotency-Key so a retried or re-run batch gets its original results.\nconst rows = $input.all().map(({ json }) => json);\nconst toLead = (r) => ({\n  firstName: r['First name'] || r.firstName,\n  lastName: r['Last name'] || r.lastName,\n  email: r['Email'] || r.email,\n  title: r['Title'] || r.title,\n  company: r['Company'] || r.company,\n  website: r['Website'] || r.website,\n  country: r['Country'] || r.country,\n  industry: r['Industry'] || r.industry,\n  employeeCount: r['Employees'] || r.employeeCount,\n  notes: r['Notes'] || r.notes,\n  source: 'google-sheets',\n});\nconst batches = [];\nfor (let i = 0; i < rows.length; i += 50) {\n  const chunk = rows.slice(i, i + 50);\n  const rowNumbers = chunk.map((r) => r.row_number);\n  batches.push({ json: { rowNumbers, batchRows: `${rowNumbers[0]}-${rowNumbers[rowNumbers.length - 1]}-${rowNumbers.length}`, leads: chunk.map(toLead) } });\n}\nreturn batches;"
       }
     },
     {
@@ -61,7 +94,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
+        880,
         0
       ],
       "parameters": {
@@ -73,12 +106,16 @@
             {
               "name": "x-api-key",
               "value": "={{ $env.LEAD_AGENT_API_KEY }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'sheet-' + $env.LEADS_SHEET_ID + '-rows-' + $json.batchRows }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
+        "jsonBody": "={{ JSON.stringify({ leads: $json.leads }) }}",
         "options": {
           "timeout": 600000,
           "batching": {
@@ -91,7 +128,21 @@
       },
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 3000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c3d4e5f6-0a1b-4c2d-8e3f-4a5b6c7d8e9f",
+      "name": "Stop: Lead Agent failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        320
+      ],
+      "parameters": {
+        "errorMessage": "={{ 'Lead Agent request failed after 3 tries (' + (($json.error && ($json.error.message || $json.error)) || 'request failed') + '). Rows in this batch keep an empty Status and are retried on the next run.' }}"
+      }
     },
     {
       "id": "0713f640-22f7-4f81-9540-d1b1ba47919f",
@@ -99,11 +150,56 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
+        1100,
         0
       ],
       "parameters": {
-        "jsCode": "// One row per processed lead, flattened for Google Sheets.\nconst out = [];\nfor (const r of $json.results || []) {\n  const l = r.lead || {};\n  const lead = l.lead || {};\n  out.push({ json: {\n    status: r.status,\n    errors: (r.errors || []).join('; '),\n    duplicate_of: r.duplicateOf || '',\n    full_name: lead.fullName || '',\n    email: lead.email || '',\n    title: lead.title || '',\n    company: lead.company || '',\n    company_domain: lead.companyDomain || '',\n    country: lead.country || '',\n    score: l.score ? l.score.score : '',\n    tier: l.score ? l.score.tier : '',\n    reasons: l.score ? l.score.reasons.join(' | ') : '',\n    missing_data: l.score ? l.score.missing_data.join(' | ') : '',\n    outreach_subject: l.outreach ? l.outreach.subject : '',\n    outreach_body: l.outreach ? l.outreach.body : '',\n    email_domain_accepts_mail: l.enrichment ? String(l.enrichment.emailDomainAcceptsMail) : '',\n    processed_at: new Date().toISOString(),\n  }});\n}\nreturn out;"
+        "jsCode": "// One row per processed lead. row_number links each result back to 'Leads In'.\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const batch = $('Build batches of 50').itemMatching(i).json;\n  for (const r of item.json.results || []) {\n    const l = r.lead || {};\n    const lead = l.lead || {};\n    const note = r.status === 'duplicate' ? `duplicate of ${r.duplicateOf}`\n      : r.status === 'invalid' ? (r.errors || []).join('; ')\n      : r.status === 'failed' ? `failed: ${(r.errors || []).join('; ')} (retry with POST /api/leads/${l.id}/rescore)`\n      : `lead ${l.id}${l.score ? ` scored ${l.score.score} (${l.score.tier})` : ''}`;\n    out.push({ json: {\n      row_number: batch.rowNumbers[r.index],\n      lead_agent_note: note,\n      status: r.status,\n      errors: (r.errors || []).join('; '),\n      duplicate_of: r.duplicateOf || '',\n      full_name: lead.fullName || '',\n      email: lead.email || '',\n      title: lead.title || '',\n      company: lead.company || '',\n      company_domain: lead.companyDomain || '',\n      country: lead.country || '',\n      score: l.score ? l.score.score : '',\n      tier: l.score ? l.score.tier : '',\n      reasons: l.score ? l.score.reasons.join(' | ') : '',\n      missing_data: l.score ? l.score.missing_data.join(' | ') : '',\n      outreach_subject: l.outreach ? l.outreach.subject : '',\n      outreach_body: l.outreach ? l.outreach.body : '',\n      email_domain_accepts_mail: l.enrichment ? String(l.enrichment.emailDomainAcceptsMail) : '',\n      processed_at: new Date().toISOString(),\n    }});\n  }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9",
+      "name": "Keep created leads",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "abbaeff2-540c-42ad-b75b-0ffef041ec2d",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "created",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6a7b8c9d-0e1f-4a2b-b3c4-d5e6f7a8b9c0",
+      "name": "Scored Leads columns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Drop the 'Leads In' bookkeeping fields before appending.\nreturn $input.all().map(({ json }) => {\n  const { row_number, lead_agent_note, ...row } = json;\n  return { json: row };\n});"
       }
     },
     {
@@ -112,8 +208,8 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        1100,
-        0
+        1760,
+        -100
       ],
       "parameters": {
         "operation": "append",
@@ -141,6 +237,49 @@
           "name": "Google Sheets account"
         }
       }
+    },
+    {
+      "id": "7b8c9d0e-1f2a-4b3c-c4d5-e6f7a8b9c0d1",
+      "name": "Mark rows in 'Leads In'",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.LEADS_SHEET_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads In"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "Status": "={{ $json.status }}",
+            "Lead agent note": "={{ $json.lead_agent_note }}",
+            "Processed at": "={{ $json.processed_at }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
     }
   ],
   "connections": {
@@ -156,6 +295,17 @@
       ]
     },
     "Read 'Leads In' sheet": {
+      "main": [
+        [
+          {
+            "node": "Only unprocessed rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only unprocessed rows": {
       "main": [
         [
           {
@@ -185,10 +335,44 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Stop: Lead Agent failed",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Flatten results": {
+      "main": [
+        [
+          {
+            "node": "Keep created leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark rows in 'Leads In'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep created leads": {
+      "main": [
+        [
+          {
+            "node": "Scored Leads columns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scored Leads columns": {
       "main": [
         [
           {

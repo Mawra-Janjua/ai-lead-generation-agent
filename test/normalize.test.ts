@@ -65,6 +65,19 @@ test("dedupe keys cover email and company+person", () => {
   assert.ok(dedupeKeys(a).some((k) => dedupeKeys(b).includes(k)));
 });
 
+test("company-only leads get a domain key; people at the same company stay distinct", () => {
+  const keys = (raw: Record<string, unknown>) => dedupeKeys(norm(raw).lead!);
+  const siteOnly = keys({ company: "Acme", website: "https://www.acme.example/contact" });
+  assert.deepEqual(siteOnly, ["domain:acme.example"]);
+  assert.deepEqual(keys({ company: "ACME Inc", website: "acme.example" }), siteOnly, "same website, no person -> same key");
+  const jane = keys({ company: "Acme", fullName: "Jane Roe", website: "acme.example" });
+  const john = keys({ company: "Acme", fullName: "John Poe", website: "acme.example" });
+  const ops = keys({ company: "Acme", email: "ops@acme.example" });
+  for (const k of [jane, john, ops]) assert.ok(!k.some((x) => x.startsWith("domain:")), "person/email leads get no domain key");
+  assert.ok(!jane.some((k) => john.includes(k)), "two people at one company are not duplicates");
+  assert.ok(!jane.some((k) => siteOnly.includes(k)));
+});
+
 test("ICP signals use supplied data and return null when unknown", () => {
   const s = icpSignals(norm(lead(0)).lead!, icp);
   assert.deepEqual(s, { industryMatch: true, sizeMatch: true, countryMatch: true, titleMatch: true });

@@ -6,7 +6,8 @@ import type { AddressInfo } from "node:net";
 import { ClaudeClient } from "../src/claude.ts";
 import { ClaudeLeadAI, leadFacts, tierFor } from "../src/ai.ts";
 import { icpSignals, normalizeLead } from "../src/normalize.ts";
-import { RawLeadSchema } from "../src/schemas.ts";
+import { RawLeadSchema, ScoreSchema } from "../src/schemas.ts";
+import type { HttpError } from "../src/http.ts";
 import { closeServer, icp, lead } from "./helpers.ts";
 
 async function mockApi(replies: unknown[]) {
@@ -76,4 +77,76 @@ test("leadFacts omits empty fields and tierFor keeps exclusion-driven D", () => 
   assert.equal(facts.company, "BrightCart");
   assert.equal(tierFor(85, "D"), "D");
   assert.equal(tierFor(65, "A"), "B");
+});
+
+// ---- Error mapping: every failure surfaces as a typed HttpError, never as data ----
+
+type Raw = { status?: number; body?: unknown; delayMs?: number };
+
+async function rawApi(reply: Raw) {
+  let calls = 0;
+  const server = createServer(async (req, res) => {
+    calls++;
+    for await (const _ of req);
+    if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
+    if (res.destroyed) return;
+    res.statusCode = reply.status ?? 200;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(reply.body));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return {
+    baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    calls: () => calls,
+    close: () => (server.closeAllConnections(), closeServer(server)),
+  };
+}
+
+const message = (stop_reason: string, content: unknown[], extra: Record<string, unknown> = {}) => ({
+  id: "msg", type: "message", role: "assistant", model: "claude-opus-5-5", content, stop_reason, stop_sequence: null,
+  usage: { input_tokens: 1, output_tokens: 1 }, ...extra,
+});
+const apiError = (type: string, msg: string) => ({ type: "error", error: { type, message: msg } });
+
+async function expectAIError(reply: Raw, expected: { status: number; code: string }, settings: { timeoutMs?: number } = {}) {
+  const api = await rawApi(reply);
+  try {
+    const client = new ClaudeClient({ apiKey: "k", model: "claude-opus-5-5", fallbacks: "off", baseURL: api.baseURL, maxRetries: 0, ...settings });
+    await assert.rejects(
+      client.structured({ system: "s", user: "u", schema: ScoreSchema }),
+      (e: HttpError) => {
+        assert.equal(e.code, expected.code, e.message);
+        assert.equal(e.status, expected.status);
+        return true;
+      },
+    );
+  } finally {
+    await api.close();
+  }
+}
+
+test("refusal maps to 422 ai_refused with the stop category", async () => {
+  await expectAIError({ body: message("refusal", [], { stop_details: { type: "refusal", category: "cyber" } }) }, { status: 422, code: "ai_refused" });
+});
+
+test("max_tokens truncation maps to ai_truncated (empty) or ai_invalid_output (cut-off JSON)", async () => {
+  await expectAIError({ body: message("max_tokens", []) }, { status: 502, code: "ai_truncated" });
+  await expectAIError({ body: message("max_tokens", [{ type: "text", text: '{"score": 80, "tier": "A", "reas' }]) }, { status: 502, code: "ai_invalid_output" });
+});
+
+test("output that does not match the schema maps to 502 ai_invalid_output", async () => {
+  await expectAIError({ body: message("end_turn", [{ type: "text", text: JSON.stringify({ score: "high" }) }]) }, { status: 502, code: "ai_invalid_output" });
+  await expectAIError({ body: message("end_turn", [{ type: "text", text: "not json" }]) }, { status: 502, code: "ai_invalid_output" });
+});
+
+test("5xx / overloaded, rate limit and auth errors map to typed codes", async () => {
+  await expectAIError({ status: 529, body: apiError("overloaded_error", "Overloaded") }, { status: 502, code: "ai_error" });
+  await expectAIError({ status: 500, body: apiError("api_error", "Internal") }, { status: 502, code: "ai_error" });
+  await expectAIError({ status: 429, body: apiError("rate_limit_error", "slow down") }, { status: 503, code: "ai_rate_limited" });
+  await expectAIError({ status: 401, body: apiError("authentication_error", "bad key") }, { status: 502, code: "ai_auth_failed" });
+  await expectAIError({ status: 400, body: apiError("invalid_request_error", "bad") }, { status: 502, code: "ai_bad_request" });
+});
+
+test("a request timeout maps to 503 ai_unreachable", async () => {
+  await expectAIError({ delayMs: 1000, body: message("end_turn", []) }, { status: 503, code: "ai_unreachable" }, { timeoutMs: 50 });
 });

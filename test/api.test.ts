@@ -59,7 +59,28 @@ test("request validation: empty batch, oversized batch, bad query params", async
     assert.equal((await fetch(`${app.base}/api/leads`, post({ leads: Array(51).fill(fixtureLeads[0]) }))).status, 400);
     assert.equal((await fetch(`${app.base}/api/leads?tier=Z`, get)).status, 400);
     assert.equal((await fetch(`${app.base}/api/leads?minScore=abc`, get)).status, 400);
+    assert.equal((await fetch(`${app.base}/api/leads/export.csv?tier=Z`, get)).status, 400);
+    const bad = await fetch(`${app.base}/api/leads/export.csv?minScore=abc`, get);
+    assert.equal(bad.status, 400);
+    assert.match(await bad.text(), /invalid_min_score/);
+    assert.equal((await fetch(`${app.base}/api/leads/export.csv?tier=A&minScore=50`, get)).status, 200);
     assert.equal((await fetch(`${app.base}/api/leads/nope`, get)).status, 404);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Idempotency-Key header makes a re-sent batch return the original results", async () => {
+  const app = await startApp({ apiKey: KEY });
+  try {
+    const send = (key: string, leads = fixtureLeads.slice(0, 2)) =>
+      fetch(`${app.base}/api/leads`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": KEY, "idempotency-key": key }, body: JSON.stringify({ leads }) });
+    const first = (await (await send("n8n-42")).json()) as any;
+    const retry = (await (await send("n8n-42")).json()) as any;
+    assert.deepEqual(retry.summary, first.summary);
+    assert.equal(retry.results[0].replayed, true);
+    assert.equal(retry.results[0].lead.id, first.results[0].lead.id);
+    assert.equal((await send("x".repeat(201), [fixtureLeads[3]])).status, 400);
   } finally {
     await app.close();
   }

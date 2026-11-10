@@ -10,9 +10,29 @@ export type AppOptions = {
   apiKey?: string;
   rateLimitPerMinute: number;
   maxBodyBytes: number;
+  trustProxy?: boolean;
   status: { claude: boolean; providers: string[]; model: string; icpSource: string };
   log?: (msg: string, extra?: unknown) => void;
 };
+
+/** Shared tier/minScore validation for the list and CSV export endpoints. */
+function listFilters(q: URLSearchParams): { tier?: string; minScore?: number } {
+  const tier = q.get("tier") ?? undefined;
+  if (tier && !["A", "B", "C", "D"].includes(tier)) throw new HttpError(400, "invalid_tier", "tier must be A, B, C or D");
+  const minRaw = q.get("minScore");
+  const minScore = minRaw === null || minRaw.trim() === "" ? undefined : Number(minRaw);
+  if (minScore !== undefined && !Number.isFinite(minScore)) throw new HttpError(400, "invalid_min_score", "minScore must be a number");
+  return { tier, minScore };
+}
+
+/** Optional Idempotency-Key header: lets clients (n8n retries) safely re-send a batch. */
+function idempotencyKey(headers: Record<string, string | string[] | undefined>): string | undefined {
+  const raw = headers["idempotency-key"];
+  const key = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+  if (!key) return undefined;
+  if (key.length > 200) throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key must be at most 200 characters.");
+  return key;
+}
 
 function options(q: URLSearchParams): ProcessOptions {
   const flag = (name: string) => q.get(name) !== "false";
@@ -20,7 +40,7 @@ function options(q: URLSearchParams): ProcessOptions {
 }
 
 export function createRouter(o: AppOptions) {
-  const r = new Router({ apiKey: o.apiKey, rateLimitPerMinute: o.rateLimitPerMinute, maxBodyBytes: o.maxBodyBytes, log: o.log });
+  const r = new Router({ apiKey: o.apiKey, rateLimitPerMinute: o.rateLimitPerMinute, maxBodyBytes: o.maxBodyBytes, trustProxy: o.trustProxy, log: o.log });
 
   r.on(
     "GET",
@@ -45,24 +65,19 @@ export function createRouter(o: AppOptions) {
 
   r.on("POST", "/api/leads", async (ctx) => {
     const { leads } = BatchSchema.parse(await ctx.body());
-    return { json: await o.service.ingestBatch(leads, options(ctx.query)) };
+    return { json: await o.service.ingestBatch(leads, options(ctx.query), idempotencyKey(ctx.req.headers)) };
   });
 
   r.on("POST", "/api/analyze", async (ctx) => ({ json: await o.service.analyze(await ctx.body(), options(ctx.query)) }));
 
   r.on("GET", "/api/leads", (ctx) => {
-    const tier = ctx.query.get("tier") ?? undefined;
-    if (tier && !["A", "B", "C", "D"].includes(tier)) throw new HttpError(400, "invalid_tier", "tier must be A, B, C or D");
-    const minRaw = ctx.query.get("minScore");
-    const minScore = minRaw === null ? undefined : Number(minRaw);
-    if (minScore !== undefined && !Number.isFinite(minScore)) throw new HttpError(400, "invalid_min_score", "minScore must be a number");
+    const { tier, minScore } = listFilters(ctx.query);
     const limit = Math.min(1000, Math.max(1, Number(ctx.query.get("limit") ?? 100) || 100));
     return { json: { leads: o.store.list({ tier, minScore, limit }) } };
   });
 
   r.on("GET", "/api/leads/export.csv", (ctx) => {
-    const tier = ctx.query.get("tier") ?? undefined;
-    const minScore = ctx.query.get("minScore") ? Number(ctx.query.get("minScore")) : undefined;
+    const { tier, minScore } = listFilters(ctx.query);
     const csv = toCsv(o.store.list({ tier, minScore, limit: 10_000 }));
     return {
       text: csv,

@@ -13,6 +13,8 @@ export type ClaudeSettings = {
   /** "default" enables Anthropic's server-side refusal fallback routing. */
   fallbacks: "default" | "off";
   timeoutMs?: number;
+  /** SDK retries for 408/409/429/5xx/connection errors (default 3). */
+  maxRetries?: number;
   /** Override the API base URL (used by integration tests against a local mock). */
   baseURL?: string;
 };
@@ -43,7 +45,7 @@ export class ClaudeClient {
       apiKey: settings.apiKey,
       baseURL: settings.baseURL,
       timeout: settings.timeoutMs ?? 120_000,
-      maxRetries: 3, // SDK retries 408/409/429/5xx with exponential backoff
+      maxRetries: settings.maxRetries ?? 3, // SDK retries 408/409/429/5xx with exponential backoff
     });
   }
 

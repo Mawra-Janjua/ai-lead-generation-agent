@@ -6,7 +6,9 @@ const optional = z.preprocess((v) => (typeof v === "string" && v.trim() === "" ?
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4102),
-  HOST: z.string().default("0.0.0.0"),
+  HOST: z.string().default("127.0.0.1"),
+  /** Only "true" enables X-Forwarded-For; anything else is rejected rather than silently ignored. */
+  TRUST_PROXY: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   API_KEY: optional,
   ANTHROPIC_API_KEY: optional,
   CLAUDE_MODEL: z.string().default("claude-opus-5-5"),

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { assertAuthConfigured } from "./http.ts";
 import { loadConfig, loadIcp } from "./config.ts";
 import { ClaudeClient } from "./claude.ts";
 import { ClaudeLeadAI } from "./ai.ts";
@@ -8,6 +9,12 @@ import { LeadService } from "./service.ts";
 import { createRouter } from "./app.ts";
 
 const config = loadConfig();
+try {
+  assertAuthConfigured(config.HOST, config.API_KEY);
+} catch (err) {
+  console.error((err as Error).message);
+  process.exit(1);
+}
 const { icp, source: icpSource } = loadIcp(config.ICP_FILE);
 const log = (msg: string, extra?: unknown) =>
   console.log(`[${new Date().toISOString()}] ${msg}`, extra instanceof Error ? extra.stack : (extra ?? ""));
@@ -37,14 +44,15 @@ const router = createRouter({
   apiKey: config.API_KEY,
   rateLimitPerMinute: config.RATE_LIMIT_PER_MINUTE,
   maxBodyBytes: config.MAX_BODY_BYTES,
+  trustProxy: config.TRUST_PROXY,
   status: { claude: claudeOn, providers: enricher.providers, model: config.CLAUDE_MODEL, icpSource },
   log,
 });
 
 const server = createServer(router.handle);
 server.listen(config.PORT, config.HOST, () => {
-  log(`AI Lead Generation Agent listening on http://localhost:${config.PORT} (ICP: ${icpSource})`);
-  if (!config.API_KEY) log("WARNING: API_KEY is not set — the API is unauthenticated.");
+  log(`AI Lead Generation Agent listening on http://${config.HOST}:${config.PORT} (ICP: ${icpSource})`);
+  if (!config.API_KEY) log("WARNING: API_KEY is not set — the API is unauthenticated (loopback only).");
   if (!claudeOn) log("Claude is NOT configured: scoring/outreach return 503; validation and enrichment still work.");
   if (!config.HUNTER_API_KEY) log("Hunter.io is NOT configured: enrichment is limited to DNS MX checks.");
 });

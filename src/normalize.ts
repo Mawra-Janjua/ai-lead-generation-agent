@@ -140,12 +140,18 @@ export function normalizeLead(raw: ParsedLead): { lead?: NormalizedLead; errors:
   };
 }
 
-/** Keys used to detect duplicates: exact email, and company domain + person name. */
+/**
+ * Keys used to detect duplicates: exact email, and company domain + person name.
+ * A company-only lead (no name, no email) is keyed by its domain, so the same
+ * company is not stored twice; leads that name a person never get this key,
+ * so two people at one company stay distinct.
+ */
 export function dedupeKeys(l: NormalizedLead): string[] {
   const keys: string[] = [];
   if (l.email) keys.push(`email:${l.email}`);
   const org = l.companyDomain ?? `name:${l.company.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
   if (l.fullName) keys.push(`person:${org}|${l.fullName.toLowerCase()}`);
+  if (!l.email && !l.fullName && l.companyDomain) keys.push(`domain:${l.companyDomain}`);
   return keys;
 }
 

@@ -43,6 +43,11 @@ export class LeadStore {
         key TEXT PRIMARY KEY,
         lead_id TEXT NOT NULL REFERENCES leads(id)
       );
+      CREATE TABLE IF NOT EXISTS idempotent_leads (
+        idem_key TEXT NOT NULL,
+        lead_id TEXT NOT NULL REFERENCES leads(id),
+        PRIMARY KEY (idem_key, lead_id)
+      );
       CREATE INDEX IF NOT EXISTS leads_score ON leads(score);
     `);
   }
@@ -55,22 +60,41 @@ export class LeadStore {
     return null;
   }
 
-  insert(lead: NormalizedLead, keys: string[]): LeadRecord {
+  /**
+   * Atomically reserves the dedupe keys and stores the lead. Runs in one
+   * synchronous transaction, so it cannot interleave with another request in
+   * this process, and the PRIMARY KEY on lead_keys rejects a concurrent writer
+   * from another process. A key conflict means "duplicate": nothing is stored.
+   */
+  claim(lead: NormalizedLead, keys: string[], idemKey?: string): { rec: LeadRecord } | { duplicateOf: string } {
     const now = new Date().toISOString();
     const rec: LeadRecord = { id: randomUUID(), lead, enrichment: null, signals: null, score: null, outreach: null, status: "new", error: null, createdAt: now, updatedAt: now };
-    this.db.exec("BEGIN");
+    this.db.exec("BEGIN IMMEDIATE");
     try {
+      const existing = this.findDuplicate(keys);
+      if (existing) {
+        this.db.exec("ROLLBACK");
+        return { duplicateOf: existing };
+      }
       this.db
         .prepare("INSERT INTO leads (id, data, status, error, score, tier, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?)")
         .run(rec.id, JSON.stringify(this.payload(rec)), rec.status, now, now);
-      const stmt = this.db.prepare("INSERT OR IGNORE INTO lead_keys (key, lead_id) VALUES (?, ?)");
-      for (const k of keys) stmt.run(k, rec.id);
+      const stmt = this.db.prepare("INSERT INTO lead_keys (key, lead_id) VALUES (?, ?)");
+      for (const k of new Set(keys)) stmt.run(k, rec.id);
+      if (idemKey) this.db.prepare("INSERT OR IGNORE INTO idempotent_leads (idem_key, lead_id) VALUES (?, ?)").run(idemKey, rec.id);
       this.db.exec("COMMIT");
     } catch (err) {
       this.db.exec("ROLLBACK");
+      const existing = isConstraintError(err) ? this.findDuplicate(keys) : null;
+      if (existing) return { duplicateOf: existing };
       throw err;
     }
-    return rec;
+    return { rec };
+  }
+
+  /** Was this lead created by a request carrying the same Idempotency-Key? */
+  createdWithKey(leadId: string, idemKey: string): boolean {
+    return this.db.prepare("SELECT 1 FROM idempotent_leads WHERE idem_key = ? AND lead_id = ?").get(idemKey, leadId) !== undefined;
   }
 
   save(rec: LeadRecord) {
@@ -112,4 +136,9 @@ export class LeadStore {
   close() {
     this.db.close();
   }
+}
+
+function isConstraintError(err: unknown) {
+  const e = err as { code?: string; errcode?: number; message?: string };
+  return e?.errcode === 1555 || e?.errcode === 2067 || /UNIQUE constraint failed/i.test(e?.message ?? "");
 }

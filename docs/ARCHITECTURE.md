@@ -7,7 +7,7 @@
 | `src/enrich.ts` | DNS MX lookup, Hunter.io client with throttle + 429 retry |
 | `src/ai.ts` / `src/claude.ts` | Claude scoring and outreach via structured outputs; provenance filter |
 | `src/service.ts` | Batch pipeline with bounded concurrency and per-lead error isolation |
-| `src/store.ts` | SQLite: `leads` (JSON payload + indexed score/tier) and `lead_keys` (dedupe index) |
+| `src/store.ts` | SQLite: `leads` (JSON payload + indexed score/tier), `lead_keys` (dedupe index, unique) and `idempotent_leads` (Idempotency-Key → lead) |
 | `src/csv.ts` | RFC 4180 CSV with formula-injection protection |
 | `src/app.ts`, `src/http.ts` | Routes, auth, rate limiting, error responses |
 
@@ -22,12 +22,11 @@ sequenceDiagram
   participant Hunter
   participant Claude
   Client->>Agent: POST /api/leads {leads[1..50]}
-  loop each lead (sync)
+  loop each lead (sync, before any await)
     Agent->>Agent: Zod validate + normalize
-    Agent->>DB: lookup dedupe keys
+    Agent->>DB: claim dedupe keys + insert lead (one transaction; key conflict = duplicate)
   end
   par up to AI_CONCURRENCY leads
-    Agent->>DB: insert lead + keys (transaction)
     Agent->>DNS: MX(email domain)
     Agent->>Hunter: companies/find, email-verifier (throttled)
     Agent->>Claude: score vs ICP (effort low)

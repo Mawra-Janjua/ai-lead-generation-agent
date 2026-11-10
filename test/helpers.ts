@@ -52,7 +52,7 @@ export function makeService(opts: { ai?: StubLeadAI | null; hunter?: HunterClien
   return { store, ai, service, enricher };
 }
 
-export async function startApp(opts: { apiKey?: string; ai?: StubLeadAI | null; rateLimitPerMinute?: number } = {}) {
+export async function startApp(opts: { apiKey?: string; ai?: StubLeadAI | null; rateLimitPerMinute?: number; trustProxy?: boolean } = {}) {
   const { store, ai, service, enricher } = makeService({ ai: opts.ai });
   const router = createRouter({
     service,
@@ -60,6 +60,7 @@ export async function startApp(opts: { apiKey?: string; ai?: StubLeadAI | null; 
     apiKey: opts.apiKey,
     rateLimitPerMinute: opts.rateLimitPerMinute ?? 1000,
     maxBodyBytes: 512 * 1024,
+    trustProxy: opts.trustProxy,
     status: { claude: ai !== null, providers: enricher.providers, model: "test", icpSource: "test" },
   });
   const server = createServer(router.handle);

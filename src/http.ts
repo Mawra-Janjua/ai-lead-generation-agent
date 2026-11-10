@@ -37,8 +37,28 @@ export type RouterOptions = {
   apiKey?: string;
   rateLimitPerMinute: number;
   maxBodyBytes: number;
+  /** Use the left-most X-Forwarded-For hop as the client id. Only enable behind a trusted reverse proxy. */
+  trustProxy?: boolean;
   log?: (msg: string, extra?: unknown) => void;
 };
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Refuse to expose an unauthenticated API. Without API_KEY the service may only
+ * listen on a loopback address (local development).
+ */
+export function assertAuthConfigured(host: string, apiKey: string | undefined) {
+  if (apiKey) {
+    if (apiKey.length < 16) throw new Error("API_KEY must be at least 16 characters. Generate one with: node -e \"console.log(crypto.randomUUID())\"");
+    return;
+  }
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `API_KEY is not set but HOST is ${host}. Set API_KEY, or set HOST=127.0.0.1 to run unauthenticated on this machine only.`,
+    );
+  }
+}
 
 export class Router {
   private routes: Route[] = [];
@@ -70,12 +90,12 @@ export class Router {
       const { route, params } = match;
 
       if (!route.public) {
-        this.checkApiKey(req);
-        const client = clientId(req);
-        if (!this.limiter.take(client)) {
+        // Rate-limit before checking the key so failed key guesses are counted too.
+        if (!this.limiter.take(clientId(req, !!this.opts.trustProxy))) {
           res.setHeader("retry-after", "60");
           throw new HttpError(429, "rate_limited", "Too many requests. Please wait a minute and try again.");
         }
+        this.checkApiKey(req);
       }
 
       let cached: Buffer | undefined;
@@ -120,7 +140,13 @@ export class Router {
       pathMatched = true;
       if (route.method !== method) continue;
       const params: Record<string, string> = {};
-      route.keys.forEach((k, i) => (params[k] = decodeURIComponent(m[i + 1])));
+      for (const [i, k] of route.keys.entries()) {
+        try {
+          params[k] = decodeURIComponent(m[i + 1]);
+        } catch {
+          throw new HttpError(400, "invalid_path", "The URL contains an invalid percent-encoding.");
+        }
+      }
       return { route, params };
     }
     if (pathMatched) throw new HttpError(405, "method_not_allowed", `${method} is not allowed on ${pathname}`);
@@ -144,11 +170,14 @@ function safeEqual(a: string, b: string) {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-function clientId(req: IncomingMessage) {
-  // Trust x-forwarded-for only for the left-most hop; fine for a single reverse proxy.
-  const fwd = req.headers["x-forwarded-for"];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
-  return first || req.socket.remoteAddress || "unknown";
+export function clientId(req: IncomingMessage, trustProxy: boolean) {
+  // X-Forwarded-For is client-controlled; only honour it behind a trusted proxy (TRUST_PROXY=true).
+  if (trustProxy) {
+    const fwd = req.headers["x-forwarded-for"];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
@@ -166,6 +195,9 @@ function send(res: ServerResponse, reply: Reply) {
   if (res.headersSent) return;
   res.statusCode = reply.status ?? 200;
   res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("referrer-policy", "no-referrer");
+  res.setHeader("x-frame-options", "DENY");
+  if ("json" in reply) res.setHeader("cache-control", "no-store");
   if ("json" in reply) {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.end(JSON.stringify(reply.json));

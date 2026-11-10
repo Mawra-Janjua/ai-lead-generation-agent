@@ -48,22 +48,48 @@ export class HunterClient {
   private fetchImpl: typeof fetch;
   private throttle: Throttle;
   private maxRetries: number;
+  private timeoutMs: number;
+  private retryBaseMs: number;
 
-  constructor(apiKey: string, opts: { fetchImpl?: typeof fetch; minGapMs?: number; maxRetries?: number } = {}) {
+  constructor(
+    apiKey: string,
+    opts: { fetchImpl?: typeof fetch; minGapMs?: number; maxRetries?: number; timeoutMs?: number; retryBaseMs?: number } = {},
+  ) {
     this.apiKey = apiKey;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.throttle = new Throttle(opts.minGapMs ?? 250);
-    this.maxRetries = opts.maxRetries ?? 3;
+    this.maxRetries = opts.maxRetries ?? 2;
+    this.timeoutMs = opts.timeoutMs ?? 15_000;
+    this.retryBaseMs = opts.retryBaseMs ?? 1000;
   }
 
+  /**
+   * GET with a per-attempt timeout. Retries 429, 5xx and network/timeout
+   * errors up to maxRetries times with exponential backoff; other 4xx fail
+   * immediately (retrying a bad request or key only burns quota).
+   */
   private async get(path: string, params: Record<string, string>): Promise<any | null> {
     const url = `https://api.hunter.io/v2${path}?${new URLSearchParams({ ...params, api_key: this.apiKey })}`;
+    const backoff = (attempt: number) => new Promise((r) => setTimeout(r, 2 ** attempt * this.retryBaseMs));
     for (let attempt = 0; ; attempt++) {
-      const res = await this.throttle.run(() => this.fetchImpl(url, { headers: { accept: "application/json" } }));
+      let res: Response;
+      try {
+        res = await this.throttle.run(() =>
+          this.fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(this.timeoutMs) }),
+        );
+      } catch (err) {
+        const timedOut = (err as Error)?.name === "TimeoutError" || (err as Error)?.name === "AbortError";
+        if (attempt < this.maxRetries) {
+          await backoff(attempt);
+          continue;
+        }
+        throw new Error(timedOut ? `Hunter ${path} timed out after ${this.timeoutMs}ms` : `Hunter ${path} request failed: ${(err as Error).message}`);
+      }
       if (res.status === 404) return null; // no data for this domain/email
-      if (res.status === 429 && attempt < this.maxRetries) {
+      if ((res.status === 429 || res.status >= 500) && attempt < this.maxRetries) {
         const retryAfter = Number(res.headers.get("retry-after"));
-        await new Promise((r) => setTimeout(r, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2 ** attempt * 1000));
+        if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) await new Promise((r) => setTimeout(r, retryAfter * 1000));
+        else await backoff(attempt);
         continue;
       }
       if (!res.ok) throw new Error(`Hunter ${path} returned HTTP ${res.status}`);
